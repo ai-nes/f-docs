@@ -27,6 +27,10 @@ import { WatcherRepo } from '@f-doc/db/repos/watcher/watcher.repo';
 import { LabelRepo } from '@f-doc/db/repos/label/label.repo';
 import { FavoriteRepo } from '@f-doc/db/repos/favorite/favorite.repo';
 import { TemplateRepo } from '@f-doc/db/repos/template/template.repo';
+import { OAuthClientRepo } from './repos/oauth/oauth-client.repo';
+import { OAuthAuthorizationCodeRepo } from './repos/oauth/oauth-authorization-code.repo';
+import { OAuthGrantRepo } from './repos/oauth/oauth-grant.repo';
+import { OAuthTokenRepo } from './repos/oauth/oauth-token.repo';
 import { PageListener } from '@f-doc/db/listeners/page.listener';
 import { PostgresJSDialect } from 'kysely-postgres-js';
 import * as postgres from 'postgres';
@@ -92,6 +96,10 @@ import { normalizePostgresUrl } from '../common/helpers';
     WatcherRepo,
     LabelRepo,
     TemplateRepo,
+    OAuthClientRepo,
+    OAuthAuthorizationCodeRepo,
+    OAuthGrantRepo,
+    OAuthTokenRepo,
     PageListener,
   ],
   exports: [
@@ -117,6 +125,10 @@ import { normalizePostgresUrl } from '../common/helpers';
     WatcherRepo,
     LabelRepo,
     TemplateRepo,
+    OAuthClientRepo,
+    OAuthAuthorizationCodeRepo,
+    OAuthGrantRepo,
+    OAuthTokenRepo,
   ],
 })
 export class DatabaseModule implements OnApplicationBootstrap {

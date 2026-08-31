@@ -191,9 +191,16 @@ export type UpdatableScimToken = Updateable<Omit<ScimTokens, 'id'>>;
 // OAuth
 export type OAuthClient = Selectable<OauthClients>;
 export type InsertableOAuthClient = Insertable<OauthClients>;
+export type UpdatableOAuthClient = Updateable<Omit<OauthClients, 'id'>>;
 export type OAuthGrant = Selectable<OauthGrants>;
+export type InsertableOAuthGrant = Insertable<OauthGrants>;
+export type UpdatableOAuthGrant = Updateable<Omit<OauthGrants, 'id'>>;
 export type OAuthAuthorizationCode = Selectable<OauthAuthorizationCodes>;
+export type InsertableOAuthAuthorizationCode = Insertable<OauthAuthorizationCodes>;
+export type UpdatableOAuthAuthorizationCode = Updateable<Omit<OauthAuthorizationCodes, 'id'>>;
 export type OAuthToken = Selectable<OauthTokens>;
+export type InsertableOAuthToken = Insertable<OauthTokens>;
+export type UpdatableOAuthToken = Updateable<Omit<OauthTokens, 'id'>>;
 
 // Page Embedding
 export type PageEmbedding = Selectable<PageEmbeddings>;
