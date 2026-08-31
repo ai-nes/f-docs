@@ -1,0 +1,14 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@f-doc/db/(.*)$": "<rootDir>/../src/database/$1",
+    "^@f-doc/transactional/(.*)$": "<rootDir>/../src/integrations/transactional/$1",
+    "^@f-doc/ee/(.*)$": "<rootDir>/../src/ee/$1"
+  }
+}
