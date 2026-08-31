@@ -249,4 +249,24 @@ export const MCP_TOOLS: McpToolDefinition[] = [
     mutating: false,
     inputSchema: { type: 'object', properties: {} },
   },
+
+  // ---- attachments ---------------------------------------------------
+
+  {
+    name: 'upload_attachment',
+    description:
+      'Upload a file (e.g. an SVG chart) as a real F-Doc attachment on a page, from base64-encoded content. Returns the attachment record plus its accessible URL -- embed that URL in page content via markdown image syntax (![alt](url)) to display it.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string', description: 'Page id (or slugId) the file is attached to' },
+        fileName: { type: 'string', description: 'File name including extension, e.g. "chart.svg"' },
+        mimeType: { type: 'string', description: 'Optional MIME type hint; the server derives the actual type from the file extension' },
+        contentBase64: { type: 'string', description: 'File content, base64-encoded' },
+        attachmentId: { type: 'string', description: 'Existing attachment id to overwrite in place, instead of creating a new attachment' },
+      },
+      required: ['pageId', 'fileName', 'contentBase64'],
+    },
+  },
 ];

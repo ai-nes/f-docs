@@ -27,6 +27,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { QueueJob, QueueName } from '../../../integrations/queue/constants';
 import { Queue } from 'bullmq';
 import { createByteCountingStream } from '../../../common/helpers/utils';
+import { getMimeType } from '../../../common/helpers';
 
 @Injectable()
 export class AttachmentService {
@@ -138,6 +139,52 @@ export class AttachmentService {
     }
 
     return attachment;
+  }
+
+  /**
+   * Same storage/DB path as uploadFile(), for callers that already have the
+   * full file in memory (e.g. the MCP upload_attachment tool, which only
+   * receives base64 JSON -- no multipart request to stream from). Wraps the
+   * buffer in a synthetic MultipartFile so prepareFile()'s filename
+   * sanitizing/extension logic stays the single source of truth instead of
+   * being duplicated here.
+   */
+  async uploadFileFromBuffer(opts: {
+    buffer: Buffer;
+    fileName: string;
+    mimeType?: string;
+    pageId?: string;
+    userId: string;
+    spaceId: string;
+    workspaceId: string;
+    attachmentId?: string;
+  }) {
+    const { buffer, fileName, mimeType, ...rest } = opts;
+
+    // BusboyFileStream is a Readable plus `truncated`/`bytesRead`, which
+    // busboy sets while parsing a real multipart stream. Neither is read on
+    // this path (uploadFile() tracks size itself via
+    // createByteCountingStream), so they're stubbed just to satisfy the type.
+    const fileStream = Object.assign(Readable.from(buffer), {
+      truncated: false,
+      bytesRead: buffer.length,
+    });
+
+    const syntheticFile: MultipartFile = {
+      type: 'file',
+      toBuffer: async () => buffer,
+      file: fileStream,
+      fieldname: 'file',
+      filename: fileName,
+      encoding: '7bit',
+      mimetype: mimeType || getMimeType(fileName),
+      fields: {},
+    };
+
+    return this.uploadFile({
+      filePromise: Promise.resolve(syntheticFile),
+      ...rest,
+    });
   }
 
   async uploadImage(

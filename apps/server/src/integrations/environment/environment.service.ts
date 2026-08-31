@@ -84,11 +84,15 @@ export class EnvironmentService {
   }
 
   getFileUploadSizeLimit(): string {
-    return this.configService.get<string>('FILE_UPLOAD_SIZE_LIMIT', '50mb');
+    // ConfigService's default only kicks in when the key is absent -- an
+    // empty value (the shipped .env.example default, meant as "unset, use
+    // the built-in default") is returned as-is otherwise, which made
+    // bytes('') resolve to null and every upload get rejected as too large.
+    return this.configService.get<string>('FILE_UPLOAD_SIZE_LIMIT') || '50mb';
   }
 
   getFileImportSizeLimit(): string {
-    return this.configService.get<string>('FILE_IMPORT_SIZE_LIMIT', '200mb');
+    return this.configService.get<string>('FILE_IMPORT_SIZE_LIMIT') || '200mb';
   }
 
   getAwsS3AccessKeyId(): string {

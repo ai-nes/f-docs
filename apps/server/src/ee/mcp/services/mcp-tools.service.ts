@@ -18,11 +18,16 @@ import {
   SpaceCaslAction,
   SpaceCaslSubject,
 } from '../../../core/casl/interfaces/space-ability.type';
-import { User, Workspace } from '@f-doc/db/types/entity.types';
+import { Attachment, User, Workspace } from '@f-doc/db/types/entity.types';
 import {
   jsonToHtml,
   jsonToMarkdown,
 } from '../../../collaboration/collaboration.util';
+import { AttachmentService } from '../../../core/attachment/services/attachment.service';
+import { EnvironmentService } from '../../../integrations/environment/environment.service';
+import { DomainService } from '../../../integrations/environment/domain.service';
+import { validate as isValidUUID } from 'uuid';
+import * as bytes from 'bytes';
 
 export interface McpCallContext {
   user: User;
@@ -53,6 +58,9 @@ export class McpToolsService {
     private readonly searchService: SearchService,
     private readonly workspaceRepo: WorkspaceRepo,
     private readonly spaceAbility: SpaceAbilityFactory,
+    private readonly attachmentService: AttachmentService,
+    private readonly environmentService: EnvironmentService,
+    private readonly domainService: DomainService,
   ) {}
 
   private renderContent(page: { content?: any }, format?: string) {
@@ -471,5 +479,63 @@ export class McpToolsService {
       user: ctx.user,
       workspace: { ...rest, memberCount },
     };
+  }
+
+  // ---- attachments ---------------------------------------------------
+
+  async uploadAttachment(ctx: McpCallContext, args: any) {
+    const { pageId, fileName, mimeType, contentBase64, attachmentId } =
+      args ?? {};
+    if (!pageId || !fileName || !contentBase64) {
+      throw new BadRequestException(
+        'pageId, fileName and contentBase64 are required',
+      );
+    }
+    if (attachmentId && !isValidUUID(attachmentId)) {
+      throw new BadRequestException('Invalid attachment id');
+    }
+
+    const page = await this.pageRepo.findById(pageId);
+    if (!page) throw new NotFoundException('Page not found');
+    await this.pageAccessService.validateCanEdit(page, ctx.user);
+
+    // MCP tool-call arguments only carry JSON -- callers (Claude) cannot
+    // send a real multipart request, so content arrives as base64 and gets
+    // decoded into the same Buffer a real /api/files/upload multipart
+    // stream would produce. Validate the *decoded* size, not the
+    // (larger, ~33%-inflated) base64 string length.
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(contentBase64, 'base64');
+    } catch {
+      throw new BadRequestException('contentBase64 is not valid base64');
+    }
+    if (buffer.length === 0) {
+      throw new BadRequestException('Decoded file content is empty');
+    }
+
+    const maxFileSize = bytes(this.environmentService.getFileUploadSizeLimit());
+    if (buffer.length > maxFileSize) {
+      throw new BadRequestException(
+        `File too large. Exceeds the ${this.environmentService.getFileUploadSizeLimit()} limit`,
+      );
+    }
+
+    const attachment: Attachment = await this.attachmentService.uploadFileFromBuffer({
+      buffer,
+      fileName,
+      mimeType,
+      pageId: page.id,
+      spaceId: page.spaceId,
+      userId: ctx.user.id,
+      workspaceId: ctx.workspace.id,
+      attachmentId,
+    });
+
+    return { ...attachment, url: this.buildFileUrl(ctx.workspace, attachment) };
+  }
+
+  private buildFileUrl(workspace: Workspace, attachment: Attachment): string {
+    return `${this.domainService.getUrl(workspace.hostname)}/api/files/${attachment.id}/${encodeURIComponent(attachment.fileName)}`;
   }
 }

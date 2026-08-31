@@ -224,6 +224,8 @@ export class McpController {
         return this.mcpTools.updateComment(ctx, args);
       case 'get_current_user':
         return this.mcpTools.getCurrentUser(ctx);
+      case 'upload_attachment':
+        return this.mcpTools.uploadAttachment(ctx, args);
       default:
         throw new Error(`Unhandled tool: ${name}`);
     }
