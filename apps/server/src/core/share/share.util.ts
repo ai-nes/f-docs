@@ -24,7 +24,10 @@ function updateAttachmentUrl(src: string, jwtToken: string) {
 function isPrivateAttachmentUrl(value: string) {
   return (
     !value.includes('/files/public/') &&
-    /(?:^|\/)(?:api\/)?files\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\/|$)/i.test(
+    // Attachments are currently generated with UUID v7. Keep accepting the
+    // older UUID versions as well so public shares can rewrite both old and
+    // newly imported attachment URLs.
+    /(?:^|\/)(?:api\/)?files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\/|$)/i.test(
       value,
     )
   );

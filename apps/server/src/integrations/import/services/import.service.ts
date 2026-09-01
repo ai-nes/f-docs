@@ -31,6 +31,9 @@ import { QueueJob, QueueName } from '../../queue/constants';
 import { ModuleRef } from '@nestjs/core';
 import { load } from 'cheerio';
 import { normalizeImportHtml } from '../utils/import-formatter';
+import { AttachmentService } from '../../../core/attachment/services/attachment.service';
+import { processPdfWithImages } from '@docmost/pdf-inspector';
+import { convertPdfBufferToEditorHtml } from '../utils/pdf-layout-importer';
 
 @Injectable()
 export class ImportService {
@@ -43,6 +46,7 @@ export class ImportService {
     @InjectQueue(QueueName.FILE_TASK_QUEUE)
     private readonly fileTaskQueue: Queue,
     private moduleRef: ModuleRef,
+    private readonly attachmentService: AttachmentService,
   ) {}
 
   async importPage(
@@ -202,32 +206,35 @@ export class ImportService {
     pageId: string,
     userId: string,
   ): Promise<any> {
-    let PdfImportModule: any;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      PdfImportModule = require('./../../../ee/document-import/pdf-import.service');
-    } catch (err) {
-      this.logger.error(
-        'PDF import requested but EE module not bundled in this build',
-      );
-      throw new BadRequestException(
-        'This feature requires a valid enterprise license.',
-      );
+    const result = processPdfWithImages(fileBuffer);
+    const imageUrls = new Map<number, string>();
+
+    for (const [index, image] of result.images.entries()) {
+      const isJpeg = String(image.format).toLowerCase() === 'jpeg';
+      const extension = isJpeg ? 'jpg' : 'png';
+      const attachment = await this.attachmentService.uploadFileFromBuffer({
+        buffer: image.data,
+        fileName: `pdf-page-${image.page}-image-${index}.${extension}`,
+        mimeType: isJpeg ? 'image/jpeg' : 'image/png',
+        pageId,
+        userId,
+        spaceId,
+        workspaceId,
+      });
+
+      if (!attachment) {
+        throw new BadRequestException(
+          `Could not save image ${index + 1} extracted from the PDF.`,
+        );
+      }
+
+      const fileUrl = `/api/files/${attachment.id}/${encodeURIComponent(
+        attachment.fileName,
+      )}`;
+      imageUrls.set(index, fileUrl);
     }
 
-    const pdfImportService = this.moduleRef.get(
-      PdfImportModule.PdfImportService,
-      { strict: false },
-    );
-
-    const html = await pdfImportService.convertPdfToHtml(
-      fileBuffer,
-      workspaceId,
-      spaceId,
-      pageId,
-      userId,
-    );
-
+    const html = await convertPdfBufferToEditorHtml(fileBuffer, imageUrls);
     return this.processHTML(html);
   }
 

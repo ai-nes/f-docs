@@ -16,7 +16,7 @@ RUN pnpm build
 FROM base AS installer
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl bash \
+  && apt-get install -y --no-install-recommends curl bash poppler-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # drop npm and corepack
