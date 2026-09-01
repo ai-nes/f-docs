@@ -19,6 +19,7 @@
     "migration:up": "tsx src/database/migrate.ts up",
     "migration:down": "tsx src/database/migrate.ts down",
     "migration:latest": "tsx src/database/migrate.ts latest",
+    "migration:latest:prod": "node dist/database/migrate.js latest",
     "migration:redo": "tsx src/database/migrate.ts redo",
     "migration:reset": "tsx src/database/migrate.ts down-to NO_MIGRATIONS",
     "migration:codegen": "kysely-codegen --dialect=postgres --camel-case --env-file=../../.env --out-file=./src/database/types/db.d.ts",

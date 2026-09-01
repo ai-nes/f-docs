@@ -1,0 +1,103 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+  DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+  DEPLOY_PATH: /home/oral/f-doc
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.BUILD_APP_ID }}
+          private-key: ${{ secrets.BUILD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: f-doc:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export image
+        run: docker save "f-doc:${IMAGE_TAG}" | gzip -1 > f-doc-image.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: f-doc-image
+          path: f-doc-image.tar.gz
+          retention-days: 3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docker-compose.prod.yml
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: f-doc-image
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust deployment host
+        run: ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Prepare deployment directory
+        run: ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+      - name: Upload image and compose file
+        run: scp -P "$DEPLOY_PORT" f-doc-image.tar.gz docker-compose.prod.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Activate release
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "export IMAGE_TAG='$IMAGE_TAG'; cd '$DEPLOY_PATH'; \
+            test -f .env.prod || { echo '.env.prod is missing on server'; exit 1; }; \
+            gunzip -c f-doc-image.tar.gz | docker load; \
+            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d db redis; \
+            docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --no-deps f-doc pnpm --filter server run migration:latest:prod; \
+            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d f-doc; \
+            rm -f f-doc-image.tar.gz; \
+            docker image prune -f; \
+            curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live"
