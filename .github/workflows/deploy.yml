@@ -66,6 +66,7 @@ jobs:
         with:
           sparse-checkout: |
             docker-compose.prod.yml
+          sparse-checkout-cone-mode: false
 
       - name: Download image artifact
         uses: actions/download-artifact@v4
