@@ -85,4 +85,12 @@ jobs:
           docker compose --env-file .env.prod -f docker-compose.prod.yml up -d f-doc
           rm -f "$GITHUB_WORKSPACE/f-doc-image.tar.gz"
           docker image prune -f
-          curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live; then
+              exit 0
+            fi
+            echo "Waiting for F-Doc readiness ($attempt/12)"
+            sleep 5
+          done
+          echo "F-Doc did not become ready within 60 seconds"
+          exit 1
