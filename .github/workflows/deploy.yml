@@ -85,13 +85,25 @@ jobs:
           docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --no-deps f-doc pnpm --filter server run migration:latest:prod
           docker compose --env-file .env.prod -f docker-compose.prod.yml up -d f-doc
           rm -f "$GITHUB_WORKSPACE/f-doc-image.tar.gz"
-          docker image prune -f
+          ready=0
           for attempt in $(seq 1 12); do
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live; then
-              exit 0
+              ready=1
+              break
             fi
             echo "Waiting for F-Doc readiness ($attempt/12)"
             sleep 5
           done
-          echo "F-Doc did not become ready within 60 seconds"
-          exit 1
+          if [ "$ready" -ne 1 ]; then
+            echo "F-Doc did not become ready within 60 seconds"
+            exit 1
+          fi
+          # The VPS disk is small (~19G) and each build is ~2G. Once the new
+          # release is confirmed healthy, keep only the image just deployed and
+          # drop every older f-doc build (untagging :latest, not the running
+          # image). Rollback = re-run the workflow at the target commit.
+          docker images 'f-doc' --format '{{.Repository}}:{{.Tag}}' \
+            | grep -v "^f-doc:${IMAGE_TAG}$" \
+            | xargs -r docker rmi -f || true
+          docker image prune -f || true
+          docker builder prune -f || true
