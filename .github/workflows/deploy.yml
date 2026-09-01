@@ -13,9 +13,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-  DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-  DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
   DEPLOY_PATH: /home/oral/f-doc
   IMAGE_TAG: ${{ github.sha }}
 
@@ -62,7 +59,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - name: Checkout deployment files
         uses: actions/checkout@v4
@@ -75,29 +72,17 @@ jobs:
         with:
           name: f-doc-image
 
-      - name: Configure SSH
-        uses: webfactory/ssh-agent@v0.9.1
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-
-      - name: Trust deployment host
-        run: ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
-
-      - name: Prepare deployment directory
-        run: ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
-
-      - name: Upload image and compose file
-        run: scp -P "$DEPLOY_PORT" f-doc-image.tar.gz docker-compose.prod.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
-
       - name: Activate release
         run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "export IMAGE_TAG='$IMAGE_TAG'; cd '$DEPLOY_PATH'; \
-            test -f .env.prod || { echo '.env.prod is missing on server'; exit 1; }; \
-            gunzip -c f-doc-image.tar.gz | docker load; \
-            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d db redis; \
-            docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --no-deps f-doc pnpm --filter server run migration:latest:prod; \
-            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d f-doc; \
-            rm -f f-doc-image.tar.gz; \
-            docker image prune -f; \
-            curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live"
+          set -euo pipefail
+          test -d "$DEPLOY_PATH"
+          test -f "$DEPLOY_PATH/.env.prod" || { echo '.env.prod is missing on server'; exit 1; }
+          cp docker-compose.prod.yml "$DEPLOY_PATH/docker-compose.prod.yml"
+          gzip -dc "$GITHUB_WORKSPACE/f-doc-image.tar.gz" | docker load
+          cd "$DEPLOY_PATH"
+          docker compose --env-file .env.prod -f docker-compose.prod.yml up -d db redis
+          docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm --no-deps f-doc pnpm --filter server run migration:latest:prod
+          docker compose --env-file .env.prod -f docker-compose.prod.yml up -d f-doc
+          rm -f "$GITHUB_WORKSPACE/f-doc-image.tar.gz"
+          docker image prune -f
+          curl --fail --silent --show-error http://127.0.0.1:3000/api/health/live
