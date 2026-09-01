@@ -161,6 +161,10 @@ function isBulletStart(line: PdfLine): boolean {
   return /^([•·▪◦]|[-–—])$/.test(line.items[0]?.text.trim() || '');
 }
 
+function isPageNumber(text: string): boolean {
+  return /^(?:Trang|Page)\s+\d+(?:\s*(?:\/|of)\s*\d+)?$/i.test(text.trim());
+}
+
 function isHeading(line: PdfLine): 'h1' | 'h2' | 'h3' | null {
   const size = lineFontSize(line);
   const bold = line.items.some((item) => item.bold);
@@ -237,7 +241,10 @@ function detectTableRanges(lines: PdfLine[], pageWidth: number): TableRange[] {
     }
 
     const candidateIndexes = [cursor];
-    let columnStarts = baseStarts;
+    // Keep the header's column boundaries stable. A wrapped or split row can
+    // have only some columns with visible text; shrinking the boundaries to
+    // that row would move later cells into the wrong column.
+    const columnStarts = baseStarts;
     const expectedColumnCount = Math.min(3, baseStarts.length);
     let previousTop = first.top;
 
@@ -248,10 +255,12 @@ function detectTableRanges(lines: PdfLine[], pageWidth: number): TableRange[] {
       const starts = distinctColumnStarts(line);
       if (starts.length < 2) continue;
       const common = commonColumnStarts(columnStarts, starts);
-      if (common.length < expectedColumnCount) continue;
+      // Rows are valid even when one or more cells are empty or continue on
+      // another page. Two matching boundaries are enough to identify the row;
+      // the header still supplies the complete set of columns for rendering.
+      if (common.length < Math.min(2, expectedColumnCount)) continue;
 
       candidateIndexes.push(index);
-      columnStarts = common;
       previousTop = line.top;
     }
 
@@ -408,22 +417,44 @@ function renderTextLine(line: PdfLine, omitBullet = false): string {
 }
 
 function lineAlignment(
-  line: PdfLine,
+  lines: PdfLine[],
   pageWidth: number,
 ): 'left' | 'center' | 'right' {
-  if (line.items.length === 0) return 'left';
+  const bounds = lines
+    .filter((line) => line.items.length > 0)
+    .map((line) => ({
+      left: Math.min(...line.items.map((item) => item.left)),
+      right: Math.max(
+        ...line.items.map((item) => item.left + Math.max(item.width, 1)),
+      ),
+    }));
 
-  const left = Math.min(...line.items.map((item) => item.left));
-  const right = Math.max(
-    ...line.items.map((item) => item.left + Math.max(item.width, 1)),
-  );
-  const center = (left + right) / 2;
+  if (bounds.length === 0) return 'left';
 
-  if (Math.abs(center - pageWidth / 2) <= CENTER_ALIGNMENT_TOLERANCE) {
-    return 'center';
-  }
+  const contentRight = pageWidth - CONTENT_LEFT;
+  const majority = Math.ceil(bounds.length / 2);
+  const leftAnchored = bounds.filter(
+    ({ left }) => left <= CONTENT_LEFT + 12,
+  ).length;
+  const rightAnchored = bounds.filter(
+    ({ left, right }) => left > CONTENT_LEFT + 12 && right >= contentRight - 12,
+  ).length;
 
-  if (pageWidth - right <= CONTENT_LEFT) return 'right';
+  // Long left-aligned lines naturally have their visual center near the page
+  // center. Require the block to be anchored before calling it centered.
+  if (leftAnchored >= majority) return 'left';
+  if (rightAnchored >= majority) return 'right';
+
+  const allCentered = bounds.every(({ left, right }) => {
+    const center = (left + right) / 2;
+    return (
+      left > CONTENT_LEFT + 12 &&
+      right < contentRight - 12 &&
+      Math.abs(center - pageWidth / 2) <= CENTER_ALIGNMENT_TOLERANCE
+    );
+  });
+
+  if (allCentered) return 'center';
   return 'left';
 }
 
@@ -433,7 +464,7 @@ function renderAlignedTextBlock(
   pageWidth: number,
   sourceLineAttributes = '',
 ): string {
-  const alignment = lineAlignment(lines[0], pageWidth);
+  const alignment = lineAlignment(lines, pageWidth);
   const style = alignment === 'left' ? '' : ` style="text-align:${alignment}"`;
   return `<${tag}${style}${sourceLineAttributes}>${lines
     .map((line) => renderTextLine(line))
@@ -467,7 +498,7 @@ function renderPage(
       if (top < 70 && left > pageWidth / 2 && runningHeaderTexts.has(text)) {
         return;
       }
-      if (top > pageHeight - 90 && /^Trang\s+/i.test(text)) return;
+      if (isPageNumber(text)) return;
 
       const fontId = $(element).attr('font') || '';
       const font = fonts.get(fontId) || DEFAULT_FONT;
@@ -484,7 +515,9 @@ function renderPage(
       });
     });
 
-  const lines = groupTextLines(textItems);
+  const lines = groupTextLines(textItems).filter(
+    (line) => !isPageNumber(plainLineText(line)),
+  );
   const tableRanges = detectTableRanges(lines, pageWidth);
   const consumedLines = new Set<number>();
   const events: PdfEvent[] = [];
