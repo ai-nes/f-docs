@@ -4,16 +4,10 @@ Checklist đầy đủ để đưa F-Doc lên production. Nếu chỉ cần bậ
 
 ## 1. Hạ tầng nền
 
-F-Doc cần 3 thành phần chạy cùng lúc: ứng dụng (Docker image build từ `Dockerfile`), **Postgres**, **Redis**. `docker-compose.yml` ở root repo có mẫu đầy đủ cho cả 3 — nhưng **chứa giá trị demo, không dùng thẳng cho production**:
-
-```yaml
-# docker-compose.yml hiện tại — CHỈ DÙNG THAM KHẢO, phải đổi trước khi deploy thật
-APP_SECRET: '3a3d88225a5ee7886a168434b9bdc0ff2508a1aace1232f1c5f32dc79bda5860'
-POSTGRES_PASSWORD: 9be5e2f9423532b81fe93ac3492964fb
-```
+F-Doc cần 3 thành phần chạy cùng lúc: ứng dụng (Docker image build từ `Dockerfile`), **Postgres**, **Redis**. `docker-compose.yml` ở root repo có mẫu đầy đủ cho cả 3. Mọi biến đọc từ `.env` (không hardcode secret trong compose); production dùng `docker-compose.prod.yml` + `.env.prod`.
 
 - [ ] Sinh `APP_SECRET` mới: `openssl rand -hex 32` (tối thiểu 32 ký tự theo `.env.example`)
-- [ ] Đổi `POSTGRES_PASSWORD` sang giá trị mạnh, không dùng chung với bất kỳ repo/demo nào khác
+- [ ] Đặt `POSTGRES_PASSWORD` giá trị mạnh trong `.env` / `.env.prod`, không dùng chung với bất kỳ repo/demo nào khác
 - [ ] Postgres và Redis nên có backup tự động (`db_data`/`redis_data` volume trong compose chỉ là local disk, không phải backup)
 - [ ] Xác nhận version Postgres tương thích — compose mẫu dùng `postgres:18`
 

@@ -1,16 +1,26 @@
+# Local / self-hosted stack built from source. For pre-built image releases
+# use docker-compose.prod.yml.
+#
+# Every F-Doc setting is read from .env (see .env.example). Only the two
+# connection URLs are set here, because inside Compose they must point at the
+# `db` / `redis` service names instead of the localhost values .env carries
+# for running the server directly on the host.
+
 services:
   f-doc:
     build: .
-    depends_on:
-      - db
-      - redis
+    env_file:
+      - .env
     environment:
-      APP_URL: ${APP_URL:?Set APP_URL in .env}
-      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env}
-      DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-f-doc}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-f-doc}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-f-doc}?schema=public
       REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     restart: unless-stopped
     volumes:
       - f-doc:/app/data/storage
@@ -19,11 +29,16 @@ services:
     image: postgres:18
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-f-doc}
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-f-doc}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     restart: unless-stopped
     volumes:
       - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-f-doc} -d $${POSTGRES_DB:-f-doc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:8
@@ -31,6 +46,11 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   f-doc:
