@@ -12,6 +12,7 @@ import { PageRepo } from '@f-doc/db/repos/page/page.repo';
 import { TokenService } from '../auth/services/token.service';
 import { jsonToNode } from '../../collaboration/collaboration.util';
 import {
+  getAttachmentIdFromUrl,
   getAttachmentIds,
   getProsemirrorContent,
   isAttachmentNode,
@@ -474,7 +475,15 @@ export class ShareService {
     const doc = jsonToNode(pmJson);
     doc?.descendants((node: Node) => {
       if (!isAttachmentNode(node.type.name)) return;
-      const token = tokenMap.get(node.attrs.attachmentId);
+
+      const attachmentId =
+        (typeof node.attrs.attachmentId === 'string' &&
+        isValidUUID(node.attrs.attachmentId)
+          ? node.attrs.attachmentId
+          : undefined) ??
+        getAttachmentIdFromUrl(node.attrs.src) ??
+        getAttachmentIdFromUrl(node.attrs.url);
+      const token = tokenMap.get(attachmentId);
       if (!token) return;
       updateAttachmentAttr(node, 'src', token);
       updateAttachmentAttr(node, 'url', token);

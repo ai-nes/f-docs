@@ -131,15 +131,35 @@ export function getAttachmentIds(prosemirrorJson: any) {
 
   doc?.descendants((node: Node) => {
     if (isAttachmentNode(node.type.name)) {
-      if (node.attrs.attachmentId && isValidUUID(node.attrs.attachmentId)) {
-        if (!attachmentIds.includes(node.attrs.attachmentId)) {
-          attachmentIds.push(node.attrs.attachmentId);
+      const attachmentId =
+        (typeof node.attrs.attachmentId === 'string' &&
+        isValidUUID(node.attrs.attachmentId)
+          ? node.attrs.attachmentId
+          : undefined) ??
+        getAttachmentIdFromUrl(node.attrs.src) ??
+        getAttachmentIdFromUrl(node.attrs.url);
+
+      if (attachmentId && isValidUUID(attachmentId)) {
+        if (!attachmentIds.includes(attachmentId)) {
+          attachmentIds.push(attachmentId);
         }
       }
     }
   });
 
   return attachmentIds;
+}
+
+export function getAttachmentIdFromUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const match = value.match(
+    /(?:^|\/)(?:api\/)?files\/(?:public\/)?([^/?#]+)(?:[/?#]|$)/i,
+  );
+
+  return match?.[1];
 }
 
 export function removeMarkTypeFromDoc(doc: Node, markName: string): Node {
