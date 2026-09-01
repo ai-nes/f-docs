@@ -50,6 +50,14 @@ type PdfEvent =
   | { type: 'image'; top: number; image: PdfImage }
   | { type: 'table'; top: number; html: string };
 
+type RenderedPage = {
+  html: string;
+  lines: PdfLine[];
+  tableRanges: TableRange[];
+  pageWidth: number;
+  pageHeight: number;
+};
+
 const DEFAULT_FONT: PdfFontSpec = {
   family: 'Arial',
   size: 12,
@@ -60,6 +68,7 @@ const CONTENT_LEFT = 84;
 const TABLE_X_TOLERANCE = 22;
 const MIN_TABLE_COLUMN_GAP = 60;
 const MAX_LINE_GROUP_DISTANCE = 3;
+const CENTER_ALIGNMENT_TOLERANCE = 28;
 
 function numberAttr(value: string | undefined, fallback = 0): number {
   const parsed = Number.parseFloat(value || '');
@@ -246,7 +255,10 @@ function detectTableRanges(lines: PdfLine[], pageWidth: number): TableRange[] {
       previousTop = line.top;
     }
 
-    if (candidateIndexes.length >= 3 && columnStarts.length >= 3) {
+    // A two-column table can consist of only a header row and one data row.
+    // Requiring three candidate lines would flatten that valid table back into
+    // ordinary paragraphs.
+    if (candidateIndexes.length >= 2 && columnStarts.length >= 2) {
       let end = candidateIndexes[candidateIndexes.length - 1];
 
       // A cell can wrap onto a line with only one visible column (for example
@@ -278,9 +290,44 @@ function detectTableRanges(lines: PdfLine[], pageWidth: number): TableRange[] {
   return ranges;
 }
 
+function tableRowBreakThreshold(lines: PdfLine[]): number {
+  const gaps = lines
+    .slice(1)
+    .map((line, index) => line.top - lines[index].top)
+    .filter((gap) => gap > MAX_LINE_GROUP_DISTANCE);
+
+  if (gaps.length === 0) return Number.POSITIVE_INFINITY;
+  if (gaps.length === 1) return gaps[0] * 0.8;
+
+  const sorted = [...gaps].sort((a, b) => a - b);
+  let largestJump = 0;
+  let splitIndex = 0;
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const jump = sorted[index] - sorted[index - 1];
+    if (jump > largestJump) {
+      largestJump = jump;
+      splitIndex = index;
+    }
+  }
+
+  // Wrapped lines normally have a short baseline gap while the next logical
+  // row has extra cell padding. Split between those two clusters when the
+  // PDF exposes that distinction; otherwise each visual line is safest as a
+  // separate row for tables whose rows do not wrap.
+  if (largestJump >= Math.max(6, sorted[0] * 0.25)) {
+    return (sorted[splitIndex - 1] + sorted[splitIndex]) / 2;
+  }
+
+  return sorted[0] * 0.8;
+}
+
 function renderTable(lines: PdfLine[], range: TableRange): string {
   const rows: PdfTextItem[][][] = [];
   let current: PdfTextItem[][] = [];
+  const rowBreakThreshold = tableRowBreakThreshold(
+    lines.slice(range.start, range.end + 1),
+  );
 
   const flushRow = () => {
     if (current.some((cell) => cell.length > 0)) {
@@ -291,14 +338,9 @@ function renderTable(lines: PdfLine[], range: TableRange): string {
 
   for (let index = range.start; index <= range.end; index += 1) {
     const line = lines[index];
-    const visibleColumns = new Set<number>();
-    for (const item of line.items) {
-      const column = range.columnStarts.findIndex((start) =>
-        isNear(item.left, start),
-      );
-      if (column >= 0) visibleColumns.add(column);
-    }
-    const startsNewRow = visibleColumns.has(0) && visibleColumns.size >= 2;
+    const previousLine = lines[index - 1];
+    const startsNewRow =
+      index > range.start && line.top - previousLine.top >= rowBreakThreshold;
 
     if (startsNewRow && current.length > 0) {
       flushRow();
@@ -355,7 +397,7 @@ function renderTable(lines: PdfLine[], range: TableRange): string {
       })
       .join('')}</tr>`;
 
-  return `<table><thead>${renderRow(header, true)}</thead><tbody>${body
+  return `<table data-pdf-table="true" style="width:100%"><thead>${renderRow(header, true)}</thead><tbody>${body
     .map((row) => renderRow(row, false))
     .join('')}</tbody></table>`;
 }
@@ -365,13 +407,47 @@ function renderTextLine(line: PdfLine, omitBullet = false): string {
   return renderInlineItems(items);
 }
 
+function lineAlignment(
+  line: PdfLine,
+  pageWidth: number,
+): 'left' | 'center' | 'right' {
+  if (line.items.length === 0) return 'left';
+
+  const left = Math.min(...line.items.map((item) => item.left));
+  const right = Math.max(
+    ...line.items.map((item) => item.left + Math.max(item.width, 1)),
+  );
+  const center = (left + right) / 2;
+
+  if (Math.abs(center - pageWidth / 2) <= CENTER_ALIGNMENT_TOLERANCE) {
+    return 'center';
+  }
+
+  if (pageWidth - right <= CONTENT_LEFT) return 'right';
+  return 'left';
+}
+
+function renderAlignedTextBlock(
+  tag: 'p' | 'h1' | 'h2' | 'h3',
+  lines: PdfLine[],
+  pageWidth: number,
+  sourceLineAttributes = '',
+): string {
+  const alignment = lineAlignment(lines[0], pageWidth);
+  const style = alignment === 'left' ? '' : ` style="text-align:${alignment}"`;
+  return `<${tag}${style}${sourceLineAttributes}>${lines
+    .map((line) => renderTextLine(line))
+    .join(' ')}</${tag}>`;
+}
+
 function renderPage(
   page: any,
   $: ReturnType<typeof load>,
   fonts: Map<string, PdfFontSpec>,
   imageUrls: Map<number, string>,
   nextImageIndex: { value: number },
-): string {
+  runningHeaderTexts: Set<string>,
+): RenderedPage {
   const pageWidth = numberAttr($(page).attr('width'), 892);
   const pageHeight = numberAttr($(page).attr('height'), 1262);
   const textItems: PdfTextItem[] = [];
@@ -385,8 +461,12 @@ function renderPage(
       const top = numberAttr($(element).attr('top'));
       const left = numberAttr($(element).attr('left'));
 
-      // Running page header/footer adds noise and was never part of the editable body.
-      if (top < 70 && left > pageWidth / 2) return;
+      // Running page headers are identified across the whole PDF below. Do
+      // not drop every top-right line: a table cell can legitimately continue
+      // there on the next page.
+      if (top < 70 && left > pageWidth / 2 && runningHeaderTexts.has(text)) {
+        return;
+      }
       if (top > pageHeight - 90 && /^Trang\s+/i.test(text)) return;
 
       const fontId = $(element).attr('font') || '';
@@ -410,11 +490,11 @@ function renderPage(
   const events: PdfEvent[] = [];
 
   for (const range of tableRanges) {
-    for (let index = range.start; index <= range.end; index += 1) {
-      consumedLines.add(index);
-    }
     const html = renderTable(lines, range);
     if (html) {
+      for (let index = range.start; index <= range.end; index += 1) {
+        consumedLines.add(index);
+      }
       events.push({ type: 'table', top: lines[range.start].top, html });
     }
   }
@@ -450,8 +530,17 @@ function renderPage(
 
   const flushParagraph = () => {
     if (paragraphLines.length === 0) return;
+    const firstLine = paragraphLines[0];
+    const sourceLineAttributes = ` data-pdf-line-left="${Math.round(
+      Math.min(...firstLine.items.map((item) => item.left)),
+    )}" data-pdf-line-top="${Math.round(firstLine.top)}"`;
     output.push(
-      `<p>${paragraphLines.map((line) => renderTextLine(line)).join(' ')}</p>`,
+      renderAlignedTextBlock(
+        'p',
+        paragraphLines,
+        pageWidth,
+        sourceLineAttributes,
+      ),
     );
     paragraphLines = [];
   };
@@ -467,9 +556,9 @@ function renderPage(
   const flushBlockquote = () => {
     if (blockquoteLines.length === 0) return;
     output.push(
-      `<blockquote><p>${blockquoteLines
+      `<div data-type="callout" data-callout-type="warning"><p>${blockquoteLines
         .map((line) => renderTextLine(line))
-        .join(' ')}</p></blockquote>`,
+        .join(' ')}</p></div>`,
     );
     blockquoteLines = [];
     lastBlockquoteTop = -Infinity;
@@ -517,7 +606,7 @@ function renderPage(
 
     if (heading) {
       flushText();
-      output.push(`<${heading}>${renderTextLine(line)}</${heading}>`);
+      output.push(renderAlignedTextBlock(heading, [line], pageWidth));
       lastLineTop = line.top;
       continue;
     }
@@ -576,7 +665,139 @@ function renderPage(
 
   flushText();
 
-  return output.join('\n');
+  return {
+    html: output.join('\n'),
+    lines,
+    tableRanges,
+    pageWidth,
+    pageHeight,
+  };
+}
+
+function getTableHeaderText(table: any): string {
+  return table.find('> thead > tr').first().text().replace(/\s+/g, ' ').trim();
+}
+
+function isTableAtPageEnd(page: RenderedPage, range: TableRange): boolean {
+  return (
+    range.end === page.lines.length - 1 &&
+    page.lines[range.end]?.top >= page.pageHeight * 0.65
+  );
+}
+
+function tableRangesMatch(a: TableRange, b: TableRange): boolean {
+  const expected = Math.min(a.columnStarts.length, b.columnStarts.length);
+  return (
+    expected >= 2 &&
+    commonColumnStarts(a.columnStarts, b.columnStarts).length >= expected
+  );
+}
+
+/**
+ * PDF layout extraction is page-scoped. A table that reaches the bottom of a
+ * page can therefore become two unrelated HTML tables (or a loose paragraph
+ * when the next page contains only the tail of a cell). Stitch only the
+ * unambiguous continuation cases here, before the page-break nodes are added.
+ */
+function mergeCrossPageTables(pages: RenderedPage[]): void {
+  for (let index = 0; index < pages.length - 1; index += 1) {
+    const current = pages[index];
+    const next = pages[index + 1];
+    const currentRange = current.tableRanges[current.tableRanges.length - 1];
+
+    if (!currentRange || !isTableAtPageEnd(current, currentRange)) continue;
+
+    const $current = load(current.html);
+    const $next = load(next.html);
+    const currentTable = $current('table[data-pdf-table="true"]').last();
+    if (!currentTable.length) continue;
+
+    const nextRange = next.tableRanges[0];
+    const nextTable = $next('table[data-pdf-table="true"]').first();
+
+    if (
+      nextRange &&
+      nextRange.start <= 1 &&
+      nextTable.length &&
+      tableRangesMatch(currentRange, nextRange)
+    ) {
+      const currentHeader = getTableHeaderText(currentTable);
+      const nextHeader = getTableHeaderText(nextTable);
+      const nextFirstLine = next.lines[nextRange.start];
+      const nextHeaderLooksBold =
+        nextFirstLine?.items.length > 0 &&
+        nextFirstLine.items.every((item) => item.bold);
+      const hasRepeatedHeader = currentHeader === nextHeader;
+
+      // A repeated header is strong evidence that the second table is a
+      // continuation. When a PDF does not repeat headers, a non-bold first
+      // row is the usual signal that the second segment starts with body
+      // data. Treat that row as body data rather than manufacturing a second
+      // header.
+      if (hasRepeatedHeader || !nextHeaderLooksBold) {
+        const currentBody = currentTable.find('> tbody').first();
+        if (!hasRepeatedHeader) {
+          const nextHeaderRow = nextTable.find('> thead > tr').first();
+          if (nextHeaderRow.length) currentBody.append(nextHeaderRow);
+        }
+        nextTable.find('> tbody > tr').each((_, row) => {
+          currentBody.append(row);
+        });
+        nextTable.remove();
+        current.html = $current('body').html() || '';
+        next.html = $next('body').html() || '';
+        continue;
+      }
+    }
+
+    // Some PDF producers do not repeat the table header. If only a tail line
+    // of the last cell survives on the next page, append that line to the
+    // matching cell instead of leaving it as a centred paragraph below the
+    // PAGE BREAK marker. Restrict this to the first block and a non-first
+    // column to avoid absorbing an ordinary page heading.
+    if (nextTable.length) continue;
+    const firstElement = $next('body').children().first();
+    if (firstElement.length !== 1 || firstElement[0].name !== 'p') continue;
+
+    const sourceLeft = Number.parseFloat(
+      firstElement.attr('data-pdf-line-left') || '',
+    );
+    const sourceTop = Number.parseFloat(
+      firstElement.attr('data-pdf-line-top') || '',
+    );
+    if (
+      !Number.isFinite(sourceLeft) ||
+      !Number.isFinite(sourceTop) ||
+      sourceTop > 140
+    ) {
+      continue;
+    }
+
+    let column = 0;
+    let distance = Number.POSITIVE_INFINITY;
+    currentRange.columnStarts.forEach((start, candidate) => {
+      const candidateDistance = Math.abs(sourceLeft - start);
+      if (candidateDistance < distance) {
+        column = candidate;
+        distance = candidateDistance;
+      }
+    });
+    if (column === 0 || distance > TABLE_X_TOLERANCE * 2) continue;
+
+    const lastRow = currentTable.find('> tbody > tr').last();
+    const lastCell = lastRow.children('td, th').eq(column);
+    const lastParagraph = lastCell.find('p').last();
+    if (!lastCell.length) continue;
+
+    if (lastParagraph.length) {
+      lastParagraph.append(` ${firstElement.html() || ''}`);
+    } else {
+      lastCell.append(`<p>${firstElement.html() || '&nbsp;'}</p>`);
+    }
+    firstElement.remove();
+    current.html = $current('body').html() || '';
+    next.html = $next('body').html() || '';
+  }
 }
 
 function renderPdfXml(xml: string, imageUrls: Map<number, string>): string {
@@ -592,9 +813,43 @@ function renderPdfXml(xml: string, imageUrls: Map<number, string>): string {
   });
 
   const nextImageIndex = { value: 0 };
-  const pages = $('page')
+  const runningHeaderCounts = new Map<string, number>();
+  $('page').each((_, page) => {
+    const pageWidth = numberAttr($(page).attr('width'), 892);
+    $(page)
+      .children('text')
+      .each((_, element) => {
+        const text = $(element).text().replace(/\s+/g, ' ').trim();
+        const top = numberAttr($(element).attr('top'));
+        const left = numberAttr($(element).attr('left'));
+        if (text && top < 70 && left > pageWidth / 2) {
+          runningHeaderCounts.set(
+            text,
+            (runningHeaderCounts.get(text) || 0) + 1,
+          );
+        }
+      });
+  });
+  const runningHeaderTexts = new Set(
+    [...runningHeaderCounts.entries()]
+      .filter(([, count]) => count >= 2)
+      .map(([text]) => text),
+  );
+  const renderedPages = $('page')
     .toArray()
-    .map((page) => renderPage(page, $, fonts, imageUrls, nextImageIndex))
+    .map((page) =>
+      renderPage(page, $, fonts, imageUrls, nextImageIndex, runningHeaderTexts),
+    )
+    .filter((page) => page.html.trim());
+
+  mergeCrossPageTables(renderedPages);
+
+  const pages = renderedPages
+    .map((page) =>
+      page.html
+        .replace(/\sdata-pdf-line-(?:left|top)="[^"]*"/g, '')
+        .replace(/\sdata-pdf-table="true"/g, ''),
+    )
     .filter((page) => page.trim());
 
   return pages.join('<div data-type="pageBreak"></div>');

@@ -2,6 +2,8 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { NodeView, ViewMutationRecord } from '@tiptap/pm/view';
 import { getColStyleDeclaration } from './utils/col-style';
 
+const DEFAULT_TABLE_MIN_WIDTH = 700;
+
 export function updateColumns(
   node: ProseMirrorNode,
   colgroup: HTMLElement,
@@ -11,7 +13,6 @@ export function updateColumns(
   overrideValue?: number,
 ) {
   let totalWidth = 0;
-  let fixedWidth = true;
   let nextDOM = colgroup.firstChild;
   const row = node.firstChild;
 
@@ -27,10 +28,6 @@ export function updateColumns(
         const cssWidth = hasWidth ? `${hasWidth}px` : '';
 
         totalWidth += hasWidth || cellMinWidth;
-
-        if (!hasWidth) {
-          fixedWidth = false;
-        }
 
         if (!nextDOM) {
           const colElement = document.createElement('col');
@@ -74,12 +71,18 @@ export function updateColumns(
     typeof node.attrs.style === 'string' &&
     /\bwidth\s*:/i.test(node.attrs.style);
 
-  if (fixedWidth && !hasUserWidth) {
-    table.style.width = `${totalWidth}px`;
-    table.style.minWidth = '';
+  if (hasUserWidth) {
+    // Keep a width explicitly supplied by imported/user HTML (for example
+    // width:100%). The old branch cleared it and left only the sum of the
+    // imported pixel colwidths, which made otherwise full-page PDF tables
+    // render visibly narrow.
+    table.style.minWidth = `${Math.max(totalWidth, DEFAULT_TABLE_MIN_WIDTH)}px`;
   } else {
-    table.style.width = '';
-    table.style.minWidth = `${totalWidth}px`;
+    // Tables should fill the editor column when they fit. Preserve the
+    // measured column width as a minimum so wide tables remain readable and
+    // use the wrapper's horizontal scroll instead of being crushed.
+    table.style.width = '100%';
+    table.style.minWidth = `${Math.max(totalWidth, DEFAULT_TABLE_MIN_WIDTH)}px`;
   }
 }
 

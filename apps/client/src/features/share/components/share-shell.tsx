@@ -265,7 +265,7 @@ export default function ShareShell({
         </ScrollArea>
       </AppShell.Aside>
 
-      <ShareSearchSpotlight shareId={shareId} />
+      <ShareSearchSpotlight shareId={shareId} pages={treeData} />
     </AppShell>
     </>
   );

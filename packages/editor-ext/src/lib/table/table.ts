@@ -34,6 +34,20 @@ function handleListOutdent(editor: Editor): boolean {
 }
 
 export const CustomTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      // Preserve an explicit table width from imported HTML. The table node
+      // view uses this to keep PDF-imported tables fluid instead of replacing
+      // it with the sum of their pixel column widths.
+      style: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute("style"),
+        renderHTML: (attributes: { style?: string | null }) =>
+          attributes.style ? { style: attributes.style } : {},
+      },
+    };
+  },
 
   addKeyboardShortcuts() {
     return {
@@ -100,10 +114,47 @@ export const CustomTable = Table.extend({
   renderHTML({ node, HTMLAttributes }) {
     // https://github.com/ueberdosis/tiptap/issues/4872#issuecomment-2717554498
     const originalRender = this.parent?.({ node, HTMLAttributes });
+    let tableRender = originalRender;
+
+    // Tiptap generates `width: Npx` from colwidth when serializing a table.
+    // That inline width wins over the editor CSS and makes imported PDF tables
+    // narrower than the page in read-only/public rendering. Keep the measured
+    // width as a minimum for wide tables, but let the table fill its container.
+    if (
+      Array.isArray(originalRender) &&
+      originalRender[0] === "table" &&
+      originalRender[1] &&
+      typeof originalRender[1] === "object"
+    ) {
+      const tableAttributes = {
+        ...(originalRender[1] as Record<string, unknown>),
+      };
+      const userStyle = String(HTMLAttributes.style || "");
+
+      if (!/\bwidth\s*:/i.test(userStyle)) {
+        const generatedStyle = String(tableAttributes.style || "");
+        const minWidth =
+          generatedStyle.match(/\bmin-width\s*:[^;]+/i)?.[0] ||
+          generatedStyle
+            .match(/\bwidth\s*:[^;]+/i)?.[0]
+            .replace(/^width/i, "min-width");
+
+        tableAttributes.style = ["width: 100%", minWidth]
+          .filter(Boolean)
+          .join("; ");
+      }
+
+      tableRender = [
+        originalRender[0],
+        tableAttributes,
+        ...originalRender.slice(2),
+      ] as DOMOutputSpec;
+    }
+
     const wrapper: DOMOutputSpec = [
       "div",
       { class: "tableWrapper" },
-      originalRender,
+      tableRender,
     ];
     return wrapper;
   },

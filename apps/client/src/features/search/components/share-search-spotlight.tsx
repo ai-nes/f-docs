@@ -1,7 +1,7 @@
-import { Group, Center, Text } from "@mantine/core";
+import { Box, Group, Center, Text } from "@mantine/core";
 import { Spotlight } from "@mantine/spotlight";
 import { IconSearch } from "@tabler/icons-react";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useDebouncedValue } from "@mantine/hooks";
 import { useShareSearchQuery } from "@/features/search/queries/search-query";
@@ -10,11 +10,32 @@ import { getPageIcon } from "@/lib";
 import { useTranslation } from "react-i18next";
 import { shareSearchSpotlightStore } from "@/features/search/constants.ts";
 import DOMPurify from "dompurify";
+import type { SharedPageTreeNode } from "@/features/share/utils.ts";
 
 interface ShareSearchSpotlightProps {
   shareId?: string;
+  pages?: SharedPageTreeNode[] | null;
 }
-export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
+
+interface FlattenedSharedPage {
+  node: SharedPageTreeNode;
+  depth: number;
+}
+
+function flattenSharedPageTree(
+  nodes: SharedPageTreeNode[],
+  depth = 0,
+): FlattenedSharedPage[] {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenSharedPageTree(node.children ?? [], depth + 1),
+  ]);
+}
+
+export function ShareSearchSpotlight({
+  shareId,
+  pages,
+}: ShareSearchSpotlightProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [debouncedSearchQuery] = useDebouncedValue(query, 300);
@@ -24,7 +45,38 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
     shareId,
   });
 
-  const pages = (
+  const browsePages = useMemo(
+    () => flattenSharedPageTree(pages ?? []),
+    [pages],
+  );
+
+  const browsePageActions = browsePages.map(({ node, depth }) => {
+    const pageTitle = node.name || t("untitled");
+
+    return (
+      <Spotlight.Action
+        key={node.slugId}
+        component={Link}
+        //@ts-ignore
+        to={buildSharedPageUrl({
+          shareId: shareId,
+          pageTitle,
+          pageSlugId: node.slugId,
+        })}
+        style={{
+          userSelect: "none",
+          paddingLeft: `${12 + depth * 20}px`,
+        }}
+      >
+        <Group wrap="nowrap" w="100%">
+          <Center>{getPageIcon(node.icon)}</Center>
+          <Text truncate>{pageTitle}</Text>
+        </Group>
+      </Spotlight.Action>
+    );
+  });
+
+  const searchResultActions = (
     searchResults && searchResults.length > 0 ? searchResults : []
   ).map((page) => (
     <Spotlight.Action
@@ -67,6 +119,7 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
         store={shareSearchSpotlightStore}
         query={query}
         onQueryChange={setQuery}
+        onSpotlightOpen={() => setQuery("")}
         scrollable
         overlayProps={{
           backgroundOpacity: 0.55,
@@ -77,16 +130,27 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
           aria-label={t("Search")}
           leftSection={<IconSearch size={20} stroke={1.5} />}
         />
+        {query.length === 0 && browsePageActions.length > 0 && (
+          <Box px="md" pt="sm" pb={4}>
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase">
+              {t("Pages")}
+            </Text>
+          </Box>
+        )}
         <Spotlight.ActionsList>
-          {query.length === 0 && pages.length === 0 && (
+          {query.length === 0 && browsePageActions.length > 0 && (
+            <>{browsePageActions}</>
+          )}
+
+          {query.length === 0 && browsePageActions.length === 0 && (
             <Spotlight.Empty>{t("Start typing to search...")}</Spotlight.Empty>
           )}
 
-          {query.length > 0 && pages.length === 0 && (
+          {query.length > 0 && searchResultActions.length === 0 && (
             <Spotlight.Empty>{t("No results found...")}</Spotlight.Empty>
           )}
 
-          {pages.length > 0 && pages}
+          {searchResultActions.length > 0 && searchResultActions}
         </Spotlight.ActionsList>
       </Spotlight.Root>
     </>
